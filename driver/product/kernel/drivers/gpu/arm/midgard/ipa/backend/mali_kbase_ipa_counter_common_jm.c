@@ -69,7 +69,7 @@ s64 kbase_ipa_sum_all_shader_cores(struct kbase_ipa_model_vinstr_data *model_dat
 	u32 base = 0;
 	s64 ret = 0;
 
-	core_mask = kbdev->gpu_props.props.coherency_info.group[0].core_mask;
+	core_mask = kbdev->gpu_props.coherency_info.group.core_mask;
 	while (core_mask != 0ull) {
 		if ((core_mask & 1ull) != 0ull) {
 			/* 0 < counter_value < 2^27 */
@@ -90,7 +90,7 @@ s64 kbase_ipa_sum_all_memsys_blocks(struct kbase_ipa_model_vinstr_data *model_da
 				    u32 counter)
 {
 	struct kbase_device *kbdev = model_data->kbdev;
-	const u32 num_blocks = kbdev->gpu_props.props.l2_props.num_l2_slices;
+	const u32 num_blocks = kbdev->gpu_props.num_l2_slices;
 	u32 base = 0;
 	s64 ret = 0;
 	u32 i;
@@ -211,7 +211,7 @@ int kbase_ipa_vinstr_dynamic_coeff(struct kbase_ipa_model *model, u32 *coeffp)
 
 	/* Range: 0 <= coeff < 2^57 */
 	if (energy > 0)
-		coeff = energy;
+		coeff = (u64)energy;
 
 	/* Range: 0 <= coeff < 2^57 (because active_cycles >= 1). However, this
 	 * can be constrained further: Counter values can only be increased by
@@ -244,7 +244,7 @@ int kbase_ipa_vinstr_dynamic_coeff(struct kbase_ipa_model *model, u32 *coeffp)
 	/* Scale by user-specified integer factor.
 	 * Range: 0 <= coeff_mul < 2^57
 	 */
-	coeff_mul = coeff * model_data->scaling_factor;
+	coeff_mul = coeff * (u64)model_data->scaling_factor;
 
 	/* The power models have results with units
 	 * mW/(MHz V^2), i.e. nW/(Hz V^2). With precision of 1/1000000, this

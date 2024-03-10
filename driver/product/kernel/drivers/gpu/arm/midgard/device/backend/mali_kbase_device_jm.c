@@ -43,6 +43,9 @@
 #include <backend/gpu/mali_kbase_pm_internal.h>
 #include <mali_kbase_dummy_job_wa.h>
 #include <backend/gpu/mali_kbase_clk_rate_trace_mgr.h>
+#if IS_ENABLED(CONFIG_MALI_TRACE_POWER_GPU_WORK_PERIOD)
+#include <mali_kbase_gpu_metrics.h>
+#endif
 
 /**
  * kbase_backend_late_init - Perform any backend-specific initialization.
@@ -72,8 +75,8 @@ static int kbase_backend_late_init(struct kbase_device *kbdev)
 
 #ifdef CONFIG_MALI_DEBUG
 #if IS_ENABLED(CONFIG_MALI_REAL_HW)
-	if (kbasep_common_test_interrupt_handlers(kbdev) != 0) {
-		dev_err(kbdev->dev, "Interrupt assignment check failed.\n");
+	if (kbase_validate_interrupts(kbdev) != 0) {
+		dev_err(kbdev->dev, "Interrupt validation failed.\n");
 		err = -EINVAL;
 		goto fail_interrupt_test;
 	}
@@ -213,11 +216,14 @@ static const struct kbase_device_init dev_init[] = {
 #if !IS_ENABLED(CONFIG_MALI_REAL_HW)
 	{ kbase_gpu_device_create, kbase_gpu_device_destroy, "Dummy model initialization failed" },
 #else /* !IS_ENABLED(CONFIG_MALI_REAL_HW) */
-	{ assign_irqs, NULL, "IRQ search failed" },
+	{ kbase_get_irqs, NULL, "IRQ search failed" },
 #endif /* !IS_ENABLED(CONFIG_MALI_REAL_HW) */
 #if !IS_ENABLED(CONFIG_MALI_NO_MALI)
 	{ registers_map, registers_unmap, "Register map failed" },
 #endif /* !IS_ENABLED(CONFIG_MALI_NO_MALI) */
+#if IS_ENABLED(CONFIG_MALI_TRACE_POWER_GPU_WORK_PERIOD)
+	{ kbase_gpu_metrics_init, kbase_gpu_metrics_term, "GPU metrics initialization failed" },
+#endif /* IS_ENABLED(CONFIG_MALI_TRACE_POWER_GPU_WORK_PERIOD) */
 	{ kbase_device_io_history_init, kbase_device_io_history_term,
 	  "Register access history initialization failed" },
 	{ kbase_device_pm_init, kbase_device_pm_term, "Power management initialization failed" },

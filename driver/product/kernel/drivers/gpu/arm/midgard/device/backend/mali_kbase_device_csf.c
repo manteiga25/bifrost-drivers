@@ -40,6 +40,9 @@
 #include <hwcnt/mali_kbase_hwcnt_virtualizer.h>
 #include <mali_kbase_kinstr_prfcnt.h>
 #include <tl/mali_kbase_timeline.h>
+#if IS_ENABLED(CONFIG_MALI_TRACE_POWER_GPU_WORK_PERIOD)
+#include <mali_kbase_gpu_metrics.h>
+#endif
 
 /**
  * kbase_device_firmware_hwcnt_term - Terminate CSF firmware and HWC
@@ -84,33 +87,35 @@ static int kbase_backend_late_init(struct kbase_device *kbdev)
 
 #ifdef CONFIG_MALI_DEBUG
 #if IS_ENABLED(CONFIG_MALI_REAL_HW)
-	if (kbasep_common_test_interrupt_handlers(kbdev) != 0) {
-		dev_err(kbdev->dev, "Interrupt assignment check failed.\n");
+	if (kbase_validate_interrupts(kbdev) != 0) {
+		dev_err(kbdev->dev, "Interrupt validation failed.\n");
 		err = -EINVAL;
 		goto fail_interrupt_test;
 	}
 #endif /* IS_ENABLED(CONFIG_MALI_REAL_HW) */
 #endif /* CONFIG_MALI_DEBUG */
 
-	kbase_ipa_control_init(kbdev);
+	{
+		kbase_ipa_control_init(kbdev);
 
-	/* Initialise the metrics subsystem, it couldn't be initialized earlier
-	 * due to dependency on kbase_ipa_control.
-	 */
-	err = kbasep_pm_metrics_init(kbdev);
-	if (err)
-		goto fail_pm_metrics_init;
+		/* Initialise the metrics subsystem, it couldn't be initialized earlier
+		 * due to dependency on kbase_ipa_control.
+		 */
+		err = kbasep_pm_metrics_init(kbdev);
+		if (err)
+			goto fail_pm_metrics_init;
 
-	/* Do the initialisation of devfreq.
-	 * Devfreq needs backend_timer_init() for completion of its
-	 * initialisation and it also needs to catch the first callback
-	 * occurrence of the runtime_suspend event for maintaining state
-	 * coherence with the backend power management, hence needs to be
-	 * placed before the kbase_pm_context_idle().
-	 */
-	err = kbase_backend_devfreq_init(kbdev);
-	if (err)
-		goto fail_devfreq_init;
+		/* Do the initialisation of devfreq.
+		 * Devfreq needs backend_timer_init() for completion of its
+		 * initialisation and it also needs to catch the first callback
+		 * occurrence of the runtime_suspend event for maintaining state
+		 * coherence with the backend power management, hence needs to be
+		 * placed before the kbase_pm_context_idle().
+		 */
+		err = kbase_backend_devfreq_init(kbdev);
+		if (err)
+			goto fail_devfreq_init;
+	}
 
 	/* Update gpuprops with L2_FEATURES if applicable */
 	err = kbase_gpuprops_update_l2_features(kbdev);
@@ -273,11 +278,14 @@ static const struct kbase_device_init dev_init[] = {
 #if !IS_ENABLED(CONFIG_MALI_REAL_HW)
 	{ kbase_gpu_device_create, kbase_gpu_device_destroy, "Dummy model initialization failed" },
 #else /* !IS_ENABLED(CONFIG_MALI_REAL_HW) */
-	{ assign_irqs, NULL, "IRQ search failed" },
+	{ kbase_get_irqs, NULL, "IRQ search failed" },
 #endif /* !IS_ENABLED(CONFIG_MALI_REAL_HW) */
 #if !IS_ENABLED(CONFIG_MALI_NO_MALI)
 	{ registers_map, registers_unmap, "Register map failed" },
 #endif /* !IS_ENABLED(CONFIG_MALI_NO_MALI) */
+#if IS_ENABLED(CONFIG_MALI_TRACE_POWER_GPU_WORK_PERIOD)
+	{ kbase_gpu_metrics_init, kbase_gpu_metrics_term, "GPU metrics initialization failed" },
+#endif /* IS_ENABLED(CONFIG_MALI_TRACE_POWER_GPU_WORK_PERIOD) */
 	{ power_control_init, power_control_term, "Power control initialization failed" },
 	{ kbase_device_io_history_init, kbase_device_io_history_term,
 	  "Register access history initialization failed" },

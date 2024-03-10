@@ -22,10 +22,20 @@
 #ifndef _MALI_KBASE_HW_ACCESS_H_
 #define _MALI_KBASE_HW_ACCESS_H_
 
+#include <linux/version_compat_defs.h>
+
 #define KBASE_REGMAP_PERM_READ (1U << 0)
 #define KBASE_REGMAP_PERM_WRITE (1U << 1)
 #define KBASE_REGMAP_WIDTH_32_BIT (1U << 2)
 #define KBASE_REGMAP_WIDTH_64_BIT (1U << 3)
+
+#define KBASE_REG_READ(kbdev, reg_enum)                                             \
+	(kbase_reg_is_size64(kbdev, reg_enum) ? kbase_reg_read64(kbdev, reg_enum) : \
+						      kbase_reg_read32(kbdev, reg_enum))
+
+#define KBASE_REG_WRITE(kbdev, reg_enum, value)                                             \
+	(kbase_reg_is_size64(kbdev, reg_enum) ? kbase_reg_write64(kbdev, reg_enum, value) : \
+						      kbase_reg_write32(kbdev, reg_enum, value))
 
 /**
  * kbase_reg_read32 - read from 32-bit GPU register
@@ -138,6 +148,16 @@ int kbase_reg_get_offset(struct kbase_device *kbdev, u32 reg_enum, u32 *offset);
  */
 int kbase_reg_get_enum(struct kbase_device *kbdev, u32 offset, u32 *reg_enum);
 
+#ifdef CONFIG_MALI_DEBUG
+/**
+ * kbase_reg_get_enum_string - get the string for a particular enum
+ * @reg_enum: Register enum
+ *
+ * Return: string containing the name of enum
+ */
+const char *kbase_reg_get_enum_string(u32 reg_enum);
+#endif /* CONFIG_MALI_DEBUG */
+
 /**
  * kbase_reg_get_gpu_id - get GPU ID from register or dummy model
  * @kbdev:    Kbase device pointer
@@ -168,4 +188,37 @@ u32 kbase_regmap_backend_init(struct kbase_device *kbdev);
  */
 void kbase_regmap_term(struct kbase_device *kbdev);
 
+/**
+ * kbase_reg_poll32_timeout - Poll a 32 bit register with timeout
+ * @kbdev:             Kbase device pointer
+ * @reg_enum:          Register enum
+ * @val:               Variable for result of read
+ * @cond:              Condition to be met
+ * @delay_us:          Delay between each poll (in uS)
+ * @timeout_us:        Timeout (in uS)
+ * @delay_before_read: If true delay for @delay_us before read
+ *
+ * Return: 0 if condition is met, -ETIMEDOUT if timed out.
+ */
+#define kbase_reg_poll32_timeout(kbdev, reg_enum, val, cond, delay_us, timeout_us,  \
+				 delay_before_read)                                 \
+	read_poll_timeout_atomic(kbase_reg_read32, val, cond, delay_us, timeout_us, \
+				 delay_before_read, kbdev, reg_enum)
+
+/**
+ * kbase_reg_poll64_timeout - Poll a 64 bit register with timeout
+ * @kbdev:             Kbase device pointer
+ * @reg_enum:          Register enum
+ * @val:               Variable for result of read
+ * @cond:              Condition to be met
+ * @delay_us:          Delay between each poll (in uS)
+ * @timeout_us:        Timeout (in uS)
+ * @delay_before_read: If true delay for @delay_us before read
+ *
+ * Return: 0 if condition is met, -ETIMEDOUT if timed out.
+ */
+#define kbase_reg_poll64_timeout(kbdev, reg_enum, val, cond, delay_us, timeout_us,  \
+				 delay_before_read)                                 \
+	read_poll_timeout_atomic(kbase_reg_read64, val, cond, delay_us, timeout_us, \
+				 delay_before_read, kbdev, reg_enum)
 #endif /* _MALI_KBASE_HW_ACCESS_H_ */

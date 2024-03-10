@@ -25,11 +25,7 @@
 #include <mali_kbase_fence.h>
 #include <mali_kbase_sync.h>
 
-#if (KERNEL_VERSION(4, 10, 0) > LINUX_VERSION_CODE)
-#include <linux/fence.h>
-#else
-#include <linux/dma-fence.h>
-#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0) */
+#include <linux/version_compat_defs.h>
 
 /* The maximum number of KCPU commands in flight, enqueueing more commands
  * than this value shall block.
@@ -56,17 +52,10 @@ struct kbase_kcpu_command_import_info {
  * @fence_has_force_signaled:	fence has forced signaled after fence timeouted
  */
 struct kbase_kcpu_command_fence_info {
-#if (KERNEL_VERSION(4, 10, 0) > LINUX_VERSION_CODE)
-	struct fence_cb fence_cb;
-	struct fence *fence;
-#else
 	struct dma_fence_cb fence_cb;
 	struct dma_fence *fence;
-#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0) */
 	struct kbase_kcpu_command_queue *kcpu_queue;
-#if IS_ENABLED(CONFIG_MALI_FENCE_TIMEOUT_RECOVERY)
 	bool fence_has_force_signaled;
-#endif
 };
 
 /**
@@ -251,7 +240,6 @@ struct kbase_kcpu_command {
  * @kctx:			The context to which this command queue belongs.
  * @commands:			Array of commands which have been successfully
  *				enqueued to this command queue.
- * @wq:				Dedicated workqueue for processing commands.
  * @work:			struct work_struct which contains a pointer to
  *				the function which handles processing of kcpu
  *				commands enqueued into a kcpu command queue;
@@ -298,7 +286,6 @@ struct kbase_kcpu_command_queue {
 	struct mutex lock;
 	struct kbase_context *kctx;
 	struct kbase_kcpu_command commands[KBASEP_KCPU_QUEUE_SIZE];
-	struct workqueue_struct *wq;
 	struct work_struct work;
 	struct work_struct timeout_work;
 	u8 start_offset;
@@ -422,13 +409,5 @@ int kbase_csf_kcpu_queue_halt_timers(struct kbase_device *kbdev);
  */
 void kbase_csf_kcpu_queue_resume_timers(struct kbase_device *kbdev);
 
-#if IS_ENABLED(CONFIG_MALI_FENCE_TIMEOUT_RECOVERY)
 bool kbase_kcpu_command_fence_has_force_signaled(struct kbase_kcpu_command_fence_info *fence_info);
-#else
-static inline bool
-kbase_kcpu_command_fence_has_force_signaled(struct kbase_kcpu_command_fence_info *fence_info)
-{
-	return false;
-}
-#endif
 #endif /* _KBASE_CSF_KCPU_H_ */

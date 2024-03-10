@@ -32,20 +32,26 @@
 #include "gpu/mali_kbase_gpu_id.h"
 #include "gpu/mali_kbase_gpu_coherency.h"
 
+#ifdef __KERNEL__
+#include <linux/mm.h>
+
 #if defined(PAGE_MASK) && defined(PAGE_SHIFT)
 #define LOCAL_PAGE_SHIFT PAGE_SHIFT
 #define LOCAL_PAGE_LSB ~PAGE_MASK
 #else
-#ifndef OSU_CONFIG_CPU_PAGE_SIZE_LOG2
-#define OSU_CONFIG_CPU_PAGE_SIZE_LOG2 12
+#error "Missing kernel definitions: PAGE_MASK, PAGE_SHIFT"
 #endif
 
-#if defined(OSU_CONFIG_CPU_PAGE_SIZE_LOG2)
-#define LOCAL_PAGE_SHIFT OSU_CONFIG_CPU_PAGE_SIZE_LOG2
-#define LOCAL_PAGE_LSB ((1ul << OSU_CONFIG_CPU_PAGE_SIZE_LOG2) - 1)
 #else
-#error Failed to find page size
+
+#if defined(MALI_PAGE_SIZE_AGNOSTIC)
+#define LOCAL_PAGE_SHIFT (__builtin_ctz((unsigned int)sysconf(_SC_PAGESIZE)))
+#else
+#define LOCAL_PAGE_SHIFT 12
 #endif
+
+#define LOCAL_PAGE_LSB ((1ul << LOCAL_PAGE_SHIFT) - 1)
+
 #endif
 
 /* Physical memory group ID for normal usage.
@@ -70,11 +76,15 @@
  */
 typedef __u32 base_mem_alloc_flags;
 
+#define BASE_MEM_FLAGS_MODIFIABLE_NATIVE (BASE_MEM_DONT_NEED)
+
+#define BASE_MEM_FLAGS_MODIFIABLE_IMPORTED_UMM (BASE_MEM_COHERENT_SYSTEM | BASE_MEM_COHERENT_LOCAL)
+
 /* A mask for all the flags which are modifiable via the base_mem_set_flags
  * interface.
  */
 #define BASE_MEM_FLAGS_MODIFIABLE \
-	(BASE_MEM_DONT_NEED | BASE_MEM_COHERENT_SYSTEM | BASE_MEM_COHERENT_LOCAL)
+	(BASE_MEM_FLAGS_MODIFIABLE_NATIVE | BASE_MEM_FLAGS_MODIFIABLE_IMPORTED_UMM)
 
 /* A mask of all the flags that can be returned via the base_mem_get_flags()
  * interface.
@@ -419,11 +429,11 @@ struct mali_base_gpu_thread_props {
 	__u32 max_threads;
 	__u32 max_workgroup_size;
 	__u32 max_barrier_size;
-	__u16 max_registers;
+	__u32 max_registers;
 	__u8 max_task_queue;
 	__u8 max_thread_group_split;
 	__u8 impl_tech;
-	__u8 padding[3];
+	__u8 padding;
 	__u32 tls_alloc;
 };
 
@@ -604,15 +614,15 @@ struct base_gpu_props {
  */
 
 /* For monotonic (counter) timefield */
-#define BASE_TIMEINFO_MONOTONIC_FLAG (1UL << 0)
+#define BASE_TIMEINFO_MONOTONIC_FLAG (1U << 0)
 /* For system wide timestamp */
-#define BASE_TIMEINFO_TIMESTAMP_FLAG (1UL << 1)
+#define BASE_TIMEINFO_TIMESTAMP_FLAG (1U << 1)
 /* For GPU cycle counter */
-#define BASE_TIMEINFO_CYCLE_COUNTER_FLAG (1UL << 2)
+#define BASE_TIMEINFO_CYCLE_COUNTER_FLAG (1U << 2)
 /* Specify kernel GPU register timestamp */
-#define BASE_TIMEINFO_KERNEL_SOURCE_FLAG (1UL << 30)
+#define BASE_TIMEINFO_KERNEL_SOURCE_FLAG (1U << 30)
 /* Specify userspace cntvct_el0 timestamp source */
-#define BASE_TIMEINFO_USER_SOURCE_FLAG (1UL << 31)
+#define BASE_TIMEINFO_USER_SOURCE_FLAG (1U << 31)
 
 #define BASE_TIMEREQUEST_ALLOWED_FLAGS                                         \
 	(BASE_TIMEINFO_MONOTONIC_FLAG | BASE_TIMEINFO_TIMESTAMP_FLAG |         \

@@ -28,7 +28,7 @@
 #define DTB_SET_SIZE 2
 #endif
 
-static bool read_setting_valid(unsigned int prod_id, unsigned int id, unsigned int read_setting)
+static bool read_setting_valid(unsigned int prod_model, unsigned int id, unsigned int read_setting)
 {
 	switch (id) {
 	/* Valid ID - fall through all */
@@ -48,7 +48,7 @@ static bool read_setting_valid(unsigned int prod_id, unsigned int id, unsigned i
 	case SYSC_ALLOC_ID_R_LSC:
 		break;
 	case SYSC_ALLOC_ID_R_VL:
-		if (prod_id == GPU_ID_PRODUCT_TTIX)
+		if (prod_model == GPU_ID_PRODUCT_TTIX)
 			return false;
 		break;
 	default:
@@ -71,9 +71,10 @@ static bool read_setting_valid(unsigned int prod_id, unsigned int id, unsigned i
 	return false;
 }
 
-static bool write_setting_valid(unsigned int prod_id, unsigned int id, unsigned int write_setting)
+static bool write_setting_valid(unsigned int prod_model, unsigned int id,
+				unsigned int write_setting)
 {
-	CSTD_UNUSED(prod_id);
+	CSTD_UNUSED(prod_model);
 	switch (id) {
 	/* Valid ID - fall through all */
 	case SYSC_ALLOC_ID_W_OTHER:
@@ -123,14 +124,14 @@ struct settings_status {
 	bool write;
 };
 
-static struct settings_status settings_valid(unsigned int prod_id, unsigned int id,
+static struct settings_status settings_valid(unsigned int prod_model, unsigned int id,
 					     unsigned int read_setting, unsigned int write_setting)
 {
 	struct settings_status valid = { .overall = (id < GPU_SYSC_ALLOC_COUNT * sizeof(u32)) };
 
 	if (valid.overall) {
-		valid.read = read_setting_valid(prod_id, id, read_setting);
-		valid.write = write_setting_valid(prod_id, id, write_setting);
+		valid.read = read_setting_valid(prod_model, id, read_setting);
+		valid.write = write_setting_valid(prod_model, id, write_setting);
 		valid.overall = valid.read || valid.write;
 	}
 
@@ -145,8 +146,8 @@ bool kbasep_pbha_supported(struct kbase_device *kbdev)
 int kbase_pbha_record_settings(struct kbase_device *kbdev, bool runtime, unsigned int id,
 			       unsigned int read_setting, unsigned int write_setting)
 {
-	struct settings_status const valid =
-		settings_valid(kbdev->gpu_props.gpu_id.product_id, id, read_setting, write_setting);
+	struct settings_status const valid = settings_valid(kbdev->gpu_props.gpu_id.product_model,
+							    id, read_setting, write_setting);
 
 	if (valid.overall) {
 		unsigned int const sysc_alloc_num = id / sizeof(u32);
@@ -154,7 +155,7 @@ int kbase_pbha_record_settings(struct kbase_device *kbdev, bool runtime, unsigne
 
 #if MALI_USE_CSF
 		if (runtime) {
-			int i;
+			uint i;
 
 			kbase_pm_context_active(kbdev);
 			/* Ensure host copy of SYSC_ALLOC is up to date */
@@ -214,7 +215,7 @@ void kbase_pbha_write_settings(struct kbase_device *kbdev)
 {
 #if MALI_USE_CSF
 	if (kbasep_pbha_supported(kbdev)) {
-		int i;
+		uint i;
 
 		for (i = 0; i < GPU_SYSC_ALLOC_COUNT; ++i)
 			kbase_reg_write32(kbdev, GPU_SYSC_ALLOC_OFFSET(i), kbdev->sysc_alloc[i]);
@@ -248,9 +249,10 @@ static int kbase_pbha_read_int_id_override_property(struct kbase_device *kbdev,
 		dev_err(kbdev->dev, "Bad DTB format: pbha.int_id_override\n");
 		return -EINVAL;
 	}
-	if (of_property_read_u32_array(pbha_node, "int-id-override", dtb_data, sz) != 0) {
+	if (of_property_read_u32_array(pbha_node, "int-id-override", dtb_data, (size_t)sz) != 0) {
 		/* There may be no int-id-override field. Fallback to int_id_override instead */
-		if (of_property_read_u32_array(pbha_node, "int_id_override", dtb_data, sz) != 0) {
+		if (of_property_read_u32_array(pbha_node, "int_id_override", dtb_data,
+					       (size_t)sz) != 0) {
 			dev_err(kbdev->dev, "Failed to read DTB pbha.int_id_override\n");
 			return -EINVAL;
 		}

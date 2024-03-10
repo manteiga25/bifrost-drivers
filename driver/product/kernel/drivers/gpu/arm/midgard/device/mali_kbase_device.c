@@ -67,7 +67,7 @@
 
 static DEFINE_MUTEX(kbase_dev_list_lock);
 static LIST_HEAD(kbase_dev_list);
-static int kbase_dev_nr;
+static unsigned int kbase_dev_nr;
 
 struct kbase_device *kbase_device_alloc(void)
 {
@@ -83,9 +83,10 @@ struct kbase_device *kbase_device_alloc(void)
  */
 static int kbase_device_all_as_init(struct kbase_device *kbdev)
 {
-	int i, err = 0;
+	unsigned int i;
+	int err = 0;
 
-	for (i = 0; i < kbdev->nr_hw_address_spaces; i++) {
+	for (i = 0; i < (unsigned int)kbdev->nr_hw_address_spaces; i++) {
 		err = kbase_mmu_as_init(kbdev, i);
 		if (err)
 			break;
@@ -101,10 +102,37 @@ static int kbase_device_all_as_init(struct kbase_device *kbdev)
 
 static void kbase_device_all_as_term(struct kbase_device *kbdev)
 {
-	int i;
+	unsigned int i;
 
-	for (i = 0; i < kbdev->nr_hw_address_spaces; i++)
+	for (i = 0; i < (unsigned int)kbdev->nr_hw_address_spaces; i++)
 		kbase_mmu_as_term(kbdev, i);
+}
+
+static int pcm_prioritized_process_cb(struct notifier_block *nb, unsigned long action, void *data)
+{
+#if MALI_USE_CSF
+
+	struct kbase_device *const kbdev =
+		container_of(nb, struct kbase_device, pcm_prioritized_process_nb);
+	struct pcm_prioritized_process_notifier_data *const notifier_data = data;
+	int ret = -EINVAL;
+
+	switch (action) {
+	case ADD_PRIORITIZED_PROCESS:
+		if (kbasep_adjust_prioritized_process(kbdev, true, notifier_data->pid))
+			ret = 0;
+		break;
+	case REMOVE_PRIORITIZED_PROCESS:
+		if (kbasep_adjust_prioritized_process(kbdev, false, notifier_data->pid))
+			ret = 0;
+		break;
+	}
+
+	return ret;
+
+#endif /* MALI_USE_CSF */
+
+	return 0;
 }
 
 int kbase_device_pcm_dev_init(struct kbase_device *const kbdev)
@@ -140,6 +168,18 @@ int kbase_device_pcm_dev_init(struct kbase_device *const kbdev)
 				dev_info(kbdev->dev,
 					 "Priority control manager successfully loaded");
 				kbdev->pcm_dev = pcm_dev;
+
+				kbdev->pcm_prioritized_process_nb = (struct notifier_block){
+					.notifier_call = &pcm_prioritized_process_cb,
+				};
+				if (pcm_dev->ops.pcm_prioritized_process_notifier_register !=
+				    NULL) {
+					if (pcm_dev->ops.pcm_prioritized_process_notifier_register(
+						    pcm_dev, &kbdev->pcm_prioritized_process_nb))
+						dev_warn(
+							kbdev->dev,
+							"Failed to register for changes in prioritized processes");
+				}
 			}
 		}
 		of_node_put(prio_ctrl_node);
@@ -151,8 +191,14 @@ int kbase_device_pcm_dev_init(struct kbase_device *const kbdev)
 
 void kbase_device_pcm_dev_term(struct kbase_device *const kbdev)
 {
-	if (kbdev->pcm_dev)
-		module_put(kbdev->pcm_dev->owner);
+	struct priority_control_manager_device *const pcm_dev = kbdev->pcm_dev;
+
+	if (pcm_dev) {
+		if (pcm_dev->ops.pcm_prioritized_process_notifier_unregister != NULL)
+			pcm_dev->ops.pcm_prioritized_process_notifier_unregister(
+				pcm_dev, &kbdev->pcm_prioritized_process_nb);
+		module_put(pcm_dev->owner);
+	}
 }
 
 #define KBASE_PAGES_TO_KIB(pages) (((unsigned int)pages) << (PAGE_SHIFT - 10))
@@ -253,7 +299,7 @@ int kbase_device_misc_init(struct kbase_device *const kbdev)
 	if (err)
 		goto dma_set_mask_failed;
 
-	kbdev->nr_hw_address_spaces = kbdev->gpu_props.num_address_spaces;
+	kbdev->nr_hw_address_spaces = (s8)kbdev->gpu_props.num_address_spaces;
 
 	err = kbase_device_all_as_init(kbdev);
 	if (err)
@@ -276,8 +322,6 @@ int kbase_device_misc_init(struct kbase_device *const kbdev)
 #endif /* !MALI_USE_CSF */
 
 	kbdev->mmu_mode = kbase_mmu_mode_get_aarch64();
-	kbdev->mmu_or_gpu_cache_op_wait_time_ms =
-		kbase_get_timeout_ms(kbdev, MMU_AS_INACTIVE_WAIT_TIMEOUT);
 	mutex_init(&kbdev->kctx_list_lock);
 	INIT_LIST_HEAD(&kbdev->kctx_list);
 
@@ -468,15 +512,13 @@ int kbase_device_early_init(struct kbase_device *kbdev)
 	if (err)
 		goto pm_runtime_term;
 
-
 	/* Set the list of features available on the current HW
 	 * (identified by the GPU_ID register)
 	 */
 	kbase_hw_set_features_mask(kbdev);
 
 	/* Find out GPU properties based on the GPU feature registers. */
-	kbase_gpuprops_set(kbdev);
-	err = kbase_gpuprops_set_features(kbdev);
+	err = kbase_gpuprops_init(kbdev);
 	if (err)
 		goto regmap_term;
 
@@ -485,7 +527,7 @@ int kbase_device_early_init(struct kbase_device *kbdev)
 	 */
 	err = kbase_hw_set_issues_mask(kbdev);
 	if (err)
-		goto regmap_term;
+		goto gpuprops_term;
 
 	/* We're done accessing the GPU registers for now. */
 	kbase_pm_register_access_disable(kbdev);
@@ -499,10 +541,12 @@ int kbase_device_early_init(struct kbase_device *kbdev)
 	err = kbase_install_interrupts(kbdev);
 #endif
 	if (err)
-		goto regmap_term;
+		goto gpuprops_term;
 
 	return 0;
 
+gpuprops_term:
+	kbase_gpuprops_term(kbdev);
 regmap_term:
 	kbase_regmap_term(kbdev);
 pm_runtime_term:
@@ -525,6 +569,7 @@ void kbase_device_early_term(struct kbase_device *kbdev)
 #else
 	kbase_release_interrupts(kbdev);
 #endif /* CONFIG_MALI_ARBITER_SUPPORT */
+	kbase_gpuprops_term(kbdev);
 	kbase_pm_runtime_term(kbdev);
 	kbasep_platform_device_term(kbdev);
 	kbase_ktrace_term(kbdev);

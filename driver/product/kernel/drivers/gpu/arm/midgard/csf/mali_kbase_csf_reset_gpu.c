@@ -240,13 +240,17 @@ static void kbase_csf_debug_dump_registers(struct kbase_device *kbdev)
 		kbase_reg_read32(kbdev, GPU_CONTROL_ENUM(GPU_IRQ_MASK)),
 		kbase_reg_read32(kbdev, JOB_CONTROL_ENUM(JOB_IRQ_MASK)),
 		kbase_reg_read32(kbdev, MMU_CONTROL_ENUM(IRQ_MASK)));
-	dev_err(kbdev->dev, "  PWR_OVERRIDE0=0x%08x  PWR_OVERRIDE1=0x%08x",
-		kbase_reg_read32(kbdev, GPU_CONTROL_ENUM(PWR_OVERRIDE0)),
-		kbase_reg_read32(kbdev, GPU_CONTROL_ENUM(PWR_OVERRIDE1)));
-	dev_err(kbdev->dev, "  SHADER_CONFIG=0x%08x  L2_MMU_CONFIG=0x%08x  TILER_CONFIG=0x%08x",
-		kbase_reg_read32(kbdev, GPU_CONTROL_ENUM(SHADER_CONFIG)),
-		kbase_reg_read32(kbdev, GPU_CONTROL_ENUM(L2_MMU_CONFIG)),
-		kbase_reg_read32(kbdev, GPU_CONTROL_ENUM(TILER_CONFIG)));
+	if (kbdev->gpu_props.gpu_id.arch_id < GPU_ID_ARCH_MAKE(14, 10, 0)) {
+		dev_err(kbdev->dev, "  PWR_OVERRIDE0=0x%08x  PWR_OVERRIDE1=0x%08x",
+			kbase_reg_read32(kbdev, GPU_CONTROL_ENUM(PWR_OVERRIDE0)),
+			kbase_reg_read32(kbdev, GPU_CONTROL_ENUM(PWR_OVERRIDE1)));
+		dev_err(kbdev->dev,
+			"  SHADER_CONFIG=0x%08x  L2_MMU_CONFIG=0x%08x  TILER_CONFIG=0x%08x",
+			kbase_reg_read32(kbdev, GPU_CONTROL_ENUM(SHADER_CONFIG)),
+			kbase_reg_read32(kbdev, GPU_CONTROL_ENUM(L2_MMU_CONFIG)),
+			kbase_reg_read32(kbdev, GPU_CONTROL_ENUM(TILER_CONFIG)));
+	}
+
 }
 
 /**
@@ -318,9 +322,11 @@ static enum kbasep_soft_reset_status kbase_csf_reset_gpu_once(struct kbase_devic
 			kbase_csf_firmware_log_dump_buffer(kbdev);
 	}
 
-	spin_lock_irqsave(&kbdev->hwaccess_lock, flags);
-	kbase_ipa_control_handle_gpu_reset_pre(kbdev);
-	spin_unlock_irqrestore(&kbdev->hwaccess_lock, flags);
+	{
+		spin_lock_irqsave(&kbdev->hwaccess_lock, flags);
+		kbase_ipa_control_handle_gpu_reset_pre(kbdev);
+		spin_unlock_irqrestore(&kbdev->hwaccess_lock, flags);
+	}
 
 	/* Tell hardware counters a reset is about to occur.
 	 * If the backend is in an unrecoverable error state (e.g. due to
@@ -341,7 +347,9 @@ static enum kbasep_soft_reset_status kbase_csf_reset_gpu_once(struct kbase_devic
 	mutex_lock(&kbdev->mmu_hw_mutex);
 	spin_lock_irqsave(&kbdev->hwaccess_lock, flags);
 	kbase_ctx_sched_restore_all_as(kbdev);
-	kbase_ipa_control_handle_gpu_reset_post(kbdev);
+	{
+		kbase_ipa_control_handle_gpu_reset_post(kbdev);
+	}
 	spin_unlock_irqrestore(&kbdev->hwaccess_lock, flags);
 	mutex_unlock(&kbdev->mmu_hw_mutex);
 
@@ -490,6 +498,10 @@ bool kbase_prepare_to_reset_gpu(struct kbase_device *kbdev, unsigned int flags)
 		/* Some other thread is already resetting the GPU */
 		return false;
 
+	/* Issue the wake up of threads waiting for PM state transition.
+	 * They might want to exit the wait since GPU reset has been triggered.
+	 */
+	wake_up(&kbdev->pm.backend.gpu_in_desired_state_wait);
 	return true;
 }
 KBASE_EXPORT_TEST_API(kbase_prepare_to_reset_gpu);

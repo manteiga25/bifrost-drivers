@@ -49,7 +49,7 @@ static int resets_init(struct kbase_device *kbdev)
 		return nr_resets;
 	}
 
-	resets = devm_kcalloc(kbdev->dev, nr_resets, sizeof(*resets), GFP_KERNEL);
+	resets = devm_kcalloc(kbdev->dev, (size_t)nr_resets, sizeof(*resets), GFP_KERNEL);
 	if (!resets)
 		return -ENOMEM;
 
@@ -198,6 +198,10 @@ static int kbase_device_runtime_init(struct kbase_device *kbdev)
 			 __func__, atomic_read(&kbdev->dev->power.usage_count));
 		ret = -EINVAL;
 	}
+
+	/* allocate resources for reset */
+	if (!ret)
+		ret = resets_init(kbdev);
 
 	return ret;
 }

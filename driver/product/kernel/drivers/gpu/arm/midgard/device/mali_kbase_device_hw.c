@@ -48,15 +48,33 @@ bool kbase_is_gpu_removed(struct kbase_device *kbdev)
 static int busy_wait_cache_operation(struct kbase_device *kbdev, u32 irq_bit)
 {
 	const ktime_t wait_loop_start = ktime_get_raw();
-	const u32 wait_time_ms = kbdev->mmu_or_gpu_cache_op_wait_time_ms;
+	const u32 wait_time_ms = kbase_get_timeout_ms(kbdev, MMU_AS_INACTIVE_WAIT_TIMEOUT);
 	bool completed = false;
 	s64 diff;
+	u32 irq_bits_to_check = irq_bit;
+
+	/* hwaccess_lock must be held to prevent concurrent threads from
+	 * cleaning the IRQ bits, otherwise it could be possible for this thread
+	 * to lose the event it is waiting for. In particular, concurrent attempts
+	 * to reset the GPU could go undetected and this thread would miss
+	 * the completion of the cache flush operation it is waiting for.
+	 */
+	lockdep_assert_held(&kbdev->hwaccess_lock);
+
+	/* Add the RESET_COMPLETED bit. If this bit is set, then the GPU has
+	 * been reset which implies that any cache flush operation has been
+	 * completed, too.
+	 */
+	{
+		irq_bits_to_check |= RESET_COMPLETED;
+	}
 
 	do {
 		unsigned int i;
 
 		for (i = 0; i < 1000; i++) {
-			if (kbase_reg_read32(kbdev, GPU_CONTROL_ENUM(GPU_IRQ_RAWSTAT)) & irq_bit) {
+			if (kbase_reg_read32(kbdev, GPU_CONTROL_ENUM(GPU_IRQ_RAWSTAT)) &
+			    irq_bits_to_check) {
 				completed = true;
 				break;
 			}
@@ -151,7 +169,7 @@ int kbase_gpu_cache_flush_and_busy_wait(struct kbase_device *kbdev, u32 flush_op
 				  irq_mask & ~CLEAN_CACHES_COMPLETED);
 
 		/* busy wait irq status to be enabled */
-		ret = busy_wait_cache_operation(kbdev, (u32)CLEAN_CACHES_COMPLETED);
+		ret = busy_wait_cache_operation(kbdev, CLEAN_CACHES_COMPLETED);
 		if (ret)
 			return ret;
 
@@ -170,7 +188,7 @@ int kbase_gpu_cache_flush_and_busy_wait(struct kbase_device *kbdev, u32 flush_op
 	kbase_reg_write32(kbdev, GPU_CONTROL_ENUM(GPU_COMMAND), flush_op);
 
 	/* 3. Busy-wait irq status to be enabled. */
-	ret = busy_wait_cache_operation(kbdev, (u32)CLEAN_CACHES_COMPLETED);
+	ret = busy_wait_cache_operation(kbdev, CLEAN_CACHES_COMPLETED);
 	if (ret)
 		return ret;
 
@@ -283,7 +301,7 @@ void kbase_gpu_wait_cache_clean(struct kbase_device *kbdev)
 
 int kbase_gpu_wait_cache_clean_timeout(struct kbase_device *kbdev, unsigned int wait_timeout_ms)
 {
-	long remaining = msecs_to_jiffies(wait_timeout_ms);
+	long remaining = (long)msecs_to_jiffies(wait_timeout_ms);
 	int result = 0;
 
 	while (remaining && get_cache_clean_flag(kbdev)) {

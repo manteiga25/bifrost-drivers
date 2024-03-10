@@ -35,19 +35,20 @@ void kbase_create_timeline_objects(struct kbase_device *kbdev)
 
 	/* Summarize the LPU objects. */
 	for (lpu_id = 0; lpu_id < kbdev->gpu_props.num_job_slots; lpu_id++) {
-		u32 *lpu = &kbdev->gpu_props.props.raw_props.js_features[lpu_id];
-		__kbase_tlstream_tl_new_lpu(summary, lpu, lpu_id, *lpu);
+		void *lpu = &kbdev->gpu_props.js_features[lpu_id];
+
+		__kbase_tlstream_tl_new_lpu(summary, lpu, lpu_id, 0);
 	}
 
 	/* Summarize the Address Space objects. */
 	for (as_nr = 0; as_nr < kbdev->nr_hw_address_spaces; as_nr++)
-		__kbase_tlstream_tl_new_as(summary, &kbdev->as[as_nr], as_nr);
+		__kbase_tlstream_tl_new_as(summary, &kbdev->as[as_nr], (u32)as_nr);
 
 	/* Create GPU object and make it retain all LPUs and address spaces. */
 	__kbase_tlstream_tl_new_gpu(summary, kbdev, kbdev->id, kbdev->gpu_props.num_cores);
 
 	for (lpu_id = 0; lpu_id < kbdev->gpu_props.num_job_slots; lpu_id++) {
-		void *lpu = &kbdev->gpu_props.props.raw_props.js_features[lpu_id];
+		void *lpu = &kbdev->gpu_props.js_features[lpu_id];
 		__kbase_tlstream_tl_lifelink_lpu_gpu(summary, lpu, kbdev);
 	}
 

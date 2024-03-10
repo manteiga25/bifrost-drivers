@@ -219,10 +219,16 @@ static int execute_op(struct kbase_device *kbdev, struct kbase_debug_coresight_c
 static int coresight_config_enable(struct kbase_device *kbdev,
 				   struct kbase_debug_coresight_csf_config *config)
 {
+	bool glb_init_request_pending;
+	unsigned long flags;
 	int ret = 0;
 	int i;
 
-	if (!config)
+	spin_lock_irqsave(&kbdev->hwaccess_lock, flags);
+	glb_init_request_pending = kbdev->csf.glb_init_request_pending;
+	spin_unlock_irqrestore(&kbdev->hwaccess_lock, flags);
+
+	if (!config || glb_init_request_pending)
 		return -EINVAL;
 
 	if (config->state == KBASE_DEBUG_CORESIGHT_CSF_ENABLED)
@@ -249,10 +255,16 @@ static int coresight_config_enable(struct kbase_device *kbdev,
 static int coresight_config_disable(struct kbase_device *kbdev,
 				    struct kbase_debug_coresight_csf_config *config)
 {
+	bool glb_init_request_pending;
+	unsigned long flags;
 	int ret = 0;
 	int i;
 
-	if (!config)
+	spin_lock_irqsave(&kbdev->hwaccess_lock, flags);
+	glb_init_request_pending = kbdev->csf.glb_init_request_pending;
+	spin_unlock_irqrestore(&kbdev->hwaccess_lock, flags);
+
+	if (!config || glb_init_request_pending)
 		return -EINVAL;
 
 	if (config->state == KBASE_DEBUG_CORESIGHT_CSF_DISABLED)
@@ -766,7 +778,8 @@ KBASE_EXPORT_TEST_API(kbase_debug_coresight_csf_state_check);
 bool kbase_debug_coresight_csf_state_wait(struct kbase_device *kbdev,
 					  enum kbase_debug_coresight_csf_state state)
 {
-	const long wait_timeout = kbase_csf_timeout_in_jiffies(kbdev->csf.fw_timeout_ms);
+	const long wait_timeout =
+		kbase_csf_timeout_in_jiffies(kbase_get_timeout_ms(kbdev, CSF_FIRMWARE_TIMEOUT));
 	struct kbase_debug_coresight_csf_config *config_entry, *next_config_entry;
 	unsigned long flags;
 	bool success = true;

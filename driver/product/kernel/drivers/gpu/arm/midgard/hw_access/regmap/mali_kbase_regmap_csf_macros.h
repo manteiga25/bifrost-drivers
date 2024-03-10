@@ -28,6 +28,7 @@
 
 #define ENUM_OFFSET(_index, _base, _next) (_base + _index * (_next - _base))
 
+
 #define GPU_CONTROL_ENUM(regname) GPU_CONTROL__##regname
 #define GPU_TEXTURE_FEATURES_ENUM(n) GPU_CONTROL_ENUM(TEXTURE_FEATURES_##n)
 #define GPU_TEXTURE_FEATURES_OFFSET(n) (GPU_TEXTURE_FEATURES_ENUM(0) + n)
@@ -68,6 +69,7 @@
 	ENUM_OFFSET(n, DOORBELL_BLOCK_ENUM(0, regname), DOORBELL_BLOCK_ENUM(1, regname))
 
 /* register value macros */
+
 /* L2_CONFIG PBHA values */
 #define L2_CONFIG_PBHA_HWU_SHIFT GPU_U(12)
 #define L2_CONFIG_PBHA_HWU_MASK (GPU_U(0xF) << L2_CONFIG_PBHA_HWU_SHIFT)
@@ -78,7 +80,8 @@
 	 (((value) << L2_CONFIG_PBHA_HWU_SHIFT) & L2_CONFIG_PBHA_HWU_MASK))
 
 #define PRFCNT_FEATURES_COUNTER_BLOCK_SIZE_SHIFT (0)
-#define PRFCNT_FEATURES_COUNTER_BLOCK_SIZE_MASK ((0xFF) << PRFCNT_FEATURES_COUNTER_BLOCK_SIZE_SHIFT)
+#define PRFCNT_FEATURES_COUNTER_BLOCK_SIZE_MASK \
+	((0xFFU) << PRFCNT_FEATURES_COUNTER_BLOCK_SIZE_SHIFT)
 #define PRFCNT_FEATURES_COUNTER_BLOCK_SIZE_GET(reg_val)         \
 	(((reg_val)&PRFCNT_FEATURES_COUNTER_BLOCK_SIZE_MASK) >> \
 	 PRFCNT_FEATURES_COUNTER_BLOCK_SIZE_SHIFT)
@@ -185,14 +188,17 @@
 /* CSF_CONFIG register */
 #define CSF_CONFIG_FORCE_COHERENCY_FEATURES_SHIFT 2
 
-#define MCU_CNTRL_ENABLE (1 << 0)
-#define MCU_CNTRL_AUTO (1 << 1)
-#define MCU_CNTRL_DISABLE (0)
+#define MCU_CONTROL_REQ_DISABLE 0x0
+#define MCU_CONTROL_REQ_ENABLE 0x1
+#define MCU_CONTROL_REQ_AUTO 0x2
+
+#define MCU_STATUS_VALUE_DISABLED 0x0
+#define MCU_STATUS_VALUE_ENABLED 0x1
+#define MCU_STATUS_VALUE_HALT 0x2
+#define MCU_STATUS_VALUE_FATAL 0x3
 
 #define MCU_CNTRL_DOORBELL_DISABLE_SHIFT (31)
 #define MCU_CNTRL_DOORBELL_DISABLE_MASK (1 << MCU_CNTRL_DOORBELL_DISABLE_SHIFT)
-
-#define MCU_STATUS_HALTED (1 << 1)
 
 /* JOB IRQ flags */
 #define JOB_IRQ_GLOBAL_IF (1u << 31) /* Global interface interrupt received */
@@ -397,16 +403,17 @@
 	 (((value) << GPU_FAULTSTATUS_ADDRESS_VALID_SHIFT) & GPU_FAULTSTATUS_ADDRESS_VALID_MASK))
 
 /* GPU IRQ flags */
-#define GPU_FAULT (1 << 0) /* A GPU Fault has occurred */
-#define GPU_PROTECTED_FAULT (1 << 1) /* A GPU fault has occurred in protected mode */
-#define RESET_COMPLETED (1 << 8) /* Set when a reset has completed.  */
-#define POWER_CHANGED_SINGLE (1 << 9) /* Set when a single core has finished powering up or down. */
-#define POWER_CHANGED_ALL (1 << 10) /* Set when all cores have finished powering up or down. */
-#define CLEAN_CACHES_COMPLETED (1 << 17) /* Set when a cache clean operation has completed. */
-#define DOORBELL_MIRROR (1 << 18) /* Mirrors the doorbell interrupt line to the CPU */
-#define MCU_STATUS_GPU_IRQ (1 << 19) /* MCU requires attention */
+#define GPU_FAULT (1U << 0) /* A GPU Fault has occurred */
+#define GPU_PROTECTED_FAULT (1U << 1) /* A GPU fault has occurred in protected mode */
+#define RESET_COMPLETED (1U << 8) /* Set when a reset has completed.  */
+#define POWER_CHANGED_SINGLE \
+	(1U << 9) /* Set when a single core has finished powering up or down. */
+#define POWER_CHANGED_ALL (1U << 10) /* Set when all cores have finished powering up or down. */
+#define CLEAN_CACHES_COMPLETED (1U << 17) /* Set when a cache clean operation has completed. */
+#define DOORBELL_MIRROR (1U << 18) /* Mirrors the doorbell interrupt line to the CPU */
+#define MCU_STATUS_GPU_IRQ (1U << 19) /* MCU requires attention */
 #define FLUSH_PA_RANGE_COMPLETED \
-	(1 << 20) /* Set when a physical range cache clean operation has completed. */
+	(1U << 20) /* Set when a physical range cache clean operation has completed. */
 
 
 /* GPU_FEATURES register */

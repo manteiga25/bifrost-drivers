@@ -213,7 +213,24 @@ enum {
  *
  * Based on 10s timeout at 100MHz, scaled from a 50MHz GPU system.
  */
+#if IS_ENABLED(CONFIG_MALI_IS_FPGA)
+#define KCPU_FENCE_SIGNAL_TIMEOUT_CYCLES (2500000000ull)
+#else
 #define KCPU_FENCE_SIGNAL_TIMEOUT_CYCLES (1000000000ull)
+#endif
+
+/* Timeout for polling the GPU in clock cycles.
+ *
+ * Based on 10s timeout based on original MAX_LOOPS value.
+ */
+#define IPA_INACTIVE_TIMEOUT_CYCLES (1000000000ull)
+
+/* Timeout for polling the GPU for the MCU status in clock cycles.
+ *
+ * Based on 120s timeout based on original MAX_LOOPS value.
+ */
+#define CSF_FIRMWARE_STOP_TIMEOUT_CYCLES (12000000000ull)
+
 
 /* Waiting timeout for task execution on an endpoint. Based on the
  * DEFAULT_PROGRESS_TIMEOUT.
@@ -246,6 +263,24 @@ enum {
 
 #endif /* !MALI_USE_CSF */
 
+/* Timeout for polling the GPU PRFCNT_ACTIVE bit in clock cycles.
+ *
+ * Based on 120s timeout at 100MHz, based on original MAX_LOOPS value.
+ */
+#define KBASE_PRFCNT_ACTIVE_TIMEOUT_CYCLES (12000000000ull)
+
+/* Timeout for polling the GPU for a cache flush in clock cycles.
+ *
+ * Based on 120ms timeout at 100MHz, based on original MAX_LOOPS value.
+ */
+#define KBASE_CLEAN_CACHE_TIMEOUT_CYCLES (12000000ull)
+
+/* Timeout for polling the GPU for an AS command to complete in clock cycles.
+ *
+ * Based on 120s timeout at 100MHz, based on original MAX_LOOPS value.
+ */
+#define KBASE_AS_INACTIVE_TIMEOUT_CYCLES (12000000000ull)
+
 /* Default timeslice that a context is scheduled in for, in nanoseconds.
  *
  * When a context has used up this amount of time across its jobs, it is
@@ -261,7 +296,11 @@ enum {
  * is enabled the value will be read from there, otherwise this should be
  * overridden by defining GPU_FREQ_KHZ_MAX in the platform file.
  */
+#ifdef GPU_FREQ_KHZ_MAX
+#define DEFAULT_GPU_FREQ_KHZ_MAX GPU_FREQ_KHZ_MAX
+#else
 #define DEFAULT_GPU_FREQ_KHZ_MAX (5000)
+#endif /* GPU_FREQ_KHZ_MAX */
 
 /* Default timeout for task execution on an endpoint
  *
@@ -289,5 +328,9 @@ enum {
  */
 #define MMU_AS_INACTIVE_WAIT_TIMEOUT_CYCLES ((u64)50 * 1024 * 1024)
 
+#if IS_ENABLED(CONFIG_MALI_TRACE_POWER_GPU_WORK_PERIOD)
+/* Default value of the time interval at which GPU metrics tracepoints are emitted. */
+#define DEFAULT_GPU_METRICS_TP_EMIT_INTERVAL_NS (500000000u) /* 500 ms */
+#endif
 
 #endif /* _KBASE_CONFIG_DEFAULTS_H_ */

@@ -98,7 +98,7 @@ void kbase_devfreq_opp_translate(struct kbase_device *kbdev, unsigned long freq,
 	if (i == kbdev->num_opps) {
 		unsigned long voltage = get_voltage(kbdev, freq);
 
-		*core_mask = kbdev->gpu_props.props.raw_props.shader_present;
+		*core_mask = kbdev->gpu_props.shader_present;
 
 		for (i = 0; i < kbdev->nr_clocks; i++) {
 			freqs[i] = freq;
@@ -264,7 +264,7 @@ static int kbase_devfreq_status(struct device *dev, struct devfreq_dev_status *s
 static int kbase_devfreq_init_freq_table(struct kbase_device *kbdev, struct devfreq_dev_profile *dp)
 {
 	int count;
-	int i = 0;
+	unsigned int i = 0;
 	unsigned long freq;
 	struct dev_pm_opp *opp;
 
@@ -278,14 +278,14 @@ static int kbase_devfreq_init_freq_table(struct kbase_device *kbdev, struct devf
 	if (count < 0)
 		return count;
 
-	dp->freq_table = kmalloc_array(count, sizeof(dp->freq_table[0]), GFP_KERNEL);
+	dp->freq_table = kmalloc_array((size_t)count, sizeof(dp->freq_table[0]), GFP_KERNEL);
 	if (!dp->freq_table)
 		return -ENOMEM;
 
 #if KERNEL_VERSION(4, 11, 0) > LINUX_VERSION_CODE
 	rcu_read_lock();
 #endif
-	for (i = 0, freq = ULONG_MAX; i < count; i++, freq--) {
+	for (i = 0, freq = ULONG_MAX; i < (unsigned int)count; i++, freq--) {
 		opp = dev_pm_opp_find_freq_floor(kbdev->dev, &freq);
 		if (IS_ERR(opp))
 			break;
@@ -299,8 +299,8 @@ static int kbase_devfreq_init_freq_table(struct kbase_device *kbdev, struct devf
 	rcu_read_unlock();
 #endif
 
-	if (count != i)
-		dev_warn(kbdev->dev, "Unable to enumerate all OPPs (%d!=%d\n", count, i);
+	if ((unsigned int)count != i)
+		dev_warn(kbdev->dev, "Unable to enumerate all OPPs (%d!=%u\n", count, i);
 
 	dp->max_state = i;
 
@@ -393,7 +393,7 @@ static int kbase_devfreq_init_core_mask_table(struct kbase_device *kbdev)
 	struct device_node *node;
 	unsigned int i = 0;
 	int count;
-	u64 shader_present = kbdev->gpu_props.props.raw_props.shader_present;
+	u64 shader_present = kbdev->gpu_props.shader_present;
 
 	if (!opp_node)
 		return 0;
@@ -401,7 +401,8 @@ static int kbase_devfreq_init_core_mask_table(struct kbase_device *kbdev)
 		return 0;
 
 	count = dev_pm_opp_get_opp_count(kbdev->dev);
-	kbdev->devfreq_table = kmalloc_array(count, sizeof(struct kbase_devfreq_opp), GFP_KERNEL);
+	kbdev->devfreq_table =
+		kmalloc_array((size_t)count, sizeof(struct kbase_devfreq_opp), GFP_KERNEL);
 	if (!kbdev->devfreq_table)
 		return -ENOMEM;
 
@@ -456,7 +457,7 @@ static int kbase_devfreq_init_core_mask_table(struct kbase_device *kbdev)
 
 		core_count_p = of_get_property(node, "opp-core-count", NULL);
 		if (core_count_p) {
-			u64 remaining_core_mask = kbdev->gpu_props.props.raw_props.shader_present;
+			u64 remaining_core_mask = kbdev->gpu_props.shader_present;
 			int core_count = be32_to_cpup(core_count_p);
 
 			core_mask = 0;
@@ -635,7 +636,7 @@ int kbase_devfreq_init(struct kbase_device *kbdev)
 
 	if (dp->max_state > 0) {
 		/* Record the maximum frequency possible */
-		kbdev->gpu_props.props.core_props.gpu_freq_khz_max = dp->freq_table[0] / 1000;
+		kbdev->gpu_props.gpu_freq_khz_max = dp->freq_table[0] / 1000;
 	}
 
 #if IS_ENABLED(CONFIG_DEVFREQ_THERMAL)

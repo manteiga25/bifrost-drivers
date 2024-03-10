@@ -36,6 +36,9 @@
 #include "mali_kbase_hwaccess_jm.h"
 #include <mali_kbase_hwaccess_time.h>
 #include <linux/priority_control_manager.h>
+#if IS_ENABLED(CONFIG_MALI_TRACE_POWER_GPU_WORK_PERIOD)
+#include <mali_kbase_gpu_metrics.h>
+#endif
 
 /*
  * Private types
@@ -98,32 +101,142 @@ static int kbase_ktrace_get_ctx_refcnt(struct kbase_context *kctx)
  * Private functions
  */
 
+#if IS_ENABLED(CONFIG_MALI_TRACE_POWER_GPU_WORK_PERIOD)
+/**
+ * gpu_metrics_timer_callback() - Callback function for the GPU metrics hrtimer
+ *
+ * @timer: Pointer to the GPU metrics hrtimer
+ *
+ * This function will emit power/gpu_work_period tracepoint for all the active
+ * GPU metrics contexts. The timer will be restarted if needed.
+ *
+ * Return: enum value to indicate that timer should not be restarted.
+ */
+static enum hrtimer_restart gpu_metrics_timer_callback(struct hrtimer *timer)
+{
+	struct kbasep_js_device_data *js_devdata =
+		container_of(timer, struct kbasep_js_device_data, gpu_metrics_timer);
+	struct kbase_device *kbdev = container_of(js_devdata, struct kbase_device, js_data);
+	unsigned long flags;
+
+	spin_lock_irqsave(&kbdev->hwaccess_lock, flags);
+	kbase_gpu_metrics_emit_tracepoint(kbdev, ktime_get_raw_ns());
+	WARN_ON_ONCE(!js_devdata->gpu_metrics_timer_running);
+	if (js_devdata->gpu_metrics_timer_needed) {
+		hrtimer_start(&js_devdata->gpu_metrics_timer,
+			      HR_TIMER_DELAY_NSEC(kbase_gpu_metrics_get_tp_emit_interval()),
+			      HRTIMER_MODE_REL);
+	} else
+		js_devdata->gpu_metrics_timer_running = false;
+	spin_unlock_irqrestore(&kbdev->hwaccess_lock, flags);
+
+	return HRTIMER_NORESTART;
+}
 
 /**
- * core_reqs_from_jsn_features - Convert JS_FEATURES to core requirements
- * @features: JS_FEATURE register value
+ * gpu_metrics_ctx_init() - Take a reference on GPU metrics context if it exists,
+ *                          otherwise allocate and initialise one.
  *
- * Given a JS_FEATURE register value returns the core requirements that match
+ * @kctx: Pointer to the Kbase context.
+ *
+ * The GPU metrics context represents an "Application" for the purposes of GPU metrics
+ * reporting. There may be multiple kbase_contexts contributing data to a single GPU
+ * metrics context.
+ * This function takes a reference on GPU metrics context if it already exists
+ * corresponding to the Application that is creating the Kbase context, otherwise
+ * memory is allocated for it and initialised.
+ *
+ * Return: 0 on success, or negative on failure.
+ */
+static inline int gpu_metrics_ctx_init(struct kbase_context *kctx)
+{
+	struct kbase_gpu_metrics_ctx *gpu_metrics_ctx;
+	struct kbase_device *kbdev = kctx->kbdev;
+	unsigned long flags;
+	int ret = 0;
+
+	const struct cred *cred = get_current_cred();
+	const unsigned int aid = cred->euid.val;
+
+	put_cred(cred);
+
+	/* Return early if this is not a Userspace created context */
+	if (unlikely(!kctx->kfile))
+		return 0;
+
+	/* Serialize against the other threads trying to create/destroy Kbase contexts. */
+	mutex_lock(&kbdev->kctx_list_lock);
+	spin_lock_irqsave(&kbdev->hwaccess_lock, flags);
+	gpu_metrics_ctx = kbase_gpu_metrics_ctx_get(kbdev, aid);
+	spin_unlock_irqrestore(&kbdev->hwaccess_lock, flags);
+
+	if (!gpu_metrics_ctx) {
+		gpu_metrics_ctx = kmalloc(sizeof(*gpu_metrics_ctx), GFP_KERNEL);
+
+		if (gpu_metrics_ctx) {
+			spin_lock_irqsave(&kbdev->hwaccess_lock, flags);
+			kbase_gpu_metrics_ctx_init(kbdev, gpu_metrics_ctx, aid);
+			spin_unlock_irqrestore(&kbdev->hwaccess_lock, flags);
+		} else {
+			dev_err(kbdev->dev, "Allocation for gpu_metrics_ctx failed");
+			ret = -ENOMEM;
+		}
+	}
+
+	kctx->gpu_metrics_ctx = gpu_metrics_ctx;
+	mutex_unlock(&kbdev->kctx_list_lock);
+
+	return ret;
+}
+
+/**
+ * gpu_metrics_ctx_term() - Drop a reference on a GPU metrics context and free it
+ *                          if the refcount becomes 0.
+ *
+ * @kctx: Pointer to the Kbase context.
+ */
+static inline void gpu_metrics_ctx_term(struct kbase_context *kctx)
+{
+	unsigned long flags;
+
+	/* Return early if this is not a Userspace created context */
+	if (unlikely(!kctx->kfile))
+		return;
+
+	/* Serialize against the other threads trying to create/destroy Kbase contexts. */
+	mutex_lock(&kctx->kbdev->kctx_list_lock);
+	spin_lock_irqsave(&kctx->kbdev->hwaccess_lock, flags);
+	kbase_gpu_metrics_ctx_put(kctx->kbdev, kctx->gpu_metrics_ctx);
+	spin_unlock_irqrestore(&kctx->kbdev->hwaccess_lock, flags);
+	mutex_unlock(&kctx->kbdev->kctx_list_lock);
+}
+#endif
+
+/**
+ * core_reqs_from_jsn_features - Convert JSn_FEATURES to core requirements
+ * @features: parsed JSn_FEATURE register value
+ *
+ * Given a JSn_FEATURE register value returns the core requirements that match
  *
  * Return: Core requirement bit mask
  */
-static base_jd_core_req core_reqs_from_jsn_features(u16 features)
+static base_jd_core_req core_reqs_from_jsn_features(struct kbase_js_features_props *features)
 {
 	base_jd_core_req core_req = 0u;
 
-	if ((features & JS_FEATURE_SET_VALUE_JOB) != 0)
+	if (features->write_value)
 		core_req |= BASE_JD_REQ_V;
 
-	if ((features & JS_FEATURE_CACHE_FLUSH_JOB) != 0)
+	if (features->cache_flush)
 		core_req |= BASE_JD_REQ_CF;
 
-	if ((features & JS_FEATURE_COMPUTE_JOB) != 0)
+	if (features->compute_shader)
 		core_req |= BASE_JD_REQ_CS;
 
-	if ((features & JS_FEATURE_TILER_JOB) != 0)
+	if (features->tiler)
 		core_req |= BASE_JD_REQ_T;
 
-	if ((features & JS_FEATURE_FRAGMENT_JOB) != 0)
+	if (features->fragment_shader)
 		core_req |= BASE_JD_REQ_FS;
 
 	return core_req;
@@ -536,8 +649,7 @@ int kbasep_js_devdata_init(struct kbase_device *const kbdev)
 #endif
 
 	for (i = 0; i < kbdev->gpu_props.num_job_slots; ++i)
-		jsdd->js_reqs[i] = core_reqs_from_jsn_features(
-			kbdev->gpu_props.props.raw_props.js_features[i]);
+		jsdd->js_reqs[i] = core_reqs_from_jsn_features(&kbdev->gpu_props.js_features[i]);
 
 	/* On error, we could continue on: providing none of the below resources
 	 * rely on the ones above
@@ -554,6 +666,12 @@ int kbasep_js_devdata_init(struct kbase_device *const kbdev)
 		}
 	}
 
+#if IS_ENABLED(CONFIG_MALI_TRACE_POWER_GPU_WORK_PERIOD)
+	hrtimer_init(&jsdd->gpu_metrics_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+	jsdd->gpu_metrics_timer.function = gpu_metrics_timer_callback;
+	jsdd->gpu_metrics_timer_needed = false;
+	jsdd->gpu_metrics_timer_running = false;
+#endif
 
 	return 0;
 }
@@ -582,6 +700,10 @@ void kbasep_js_devdata_term(struct kbase_device *kbdev)
 				  zero_ctx_attr_ref_count, sizeof(zero_ctx_attr_ref_count)) == 0);
 	CSTD_UNUSED(zero_ctx_attr_ref_count);
 
+#if IS_ENABLED(CONFIG_MALI_TRACE_POWER_GPU_WORK_PERIOD)
+	js_devdata->gpu_metrics_timer_needed = false;
+	hrtimer_cancel(&js_devdata->gpu_metrics_timer);
+#endif
 }
 
 int kbasep_js_kctx_init(struct kbase_context *const kctx)
@@ -594,6 +716,11 @@ int kbasep_js_kctx_init(struct kbase_context *const kctx)
 	KBASE_DEBUG_ASSERT(kctx != NULL);
 
 	CSTD_UNUSED(ret);
+#if IS_ENABLED(CONFIG_MALI_TRACE_POWER_GPU_WORK_PERIOD)
+	ret = gpu_metrics_ctx_init(kctx);
+	if (ret)
+		return ret;
+#endif
 
 	for (i = 0; i < BASE_JM_MAX_NR_SLOTS; ++i)
 		INIT_LIST_HEAD(&kctx->jctx.sched_info.ctx.ctx_list_entry[i]);
@@ -670,6 +797,9 @@ void kbasep_js_kctx_term(struct kbase_context *kctx)
 	}
 
 	kbase_ctx_sched_remove_ctx(kctx);
+#if IS_ENABLED(CONFIG_MALI_TRACE_POWER_GPU_WORK_PERIOD)
+	gpu_metrics_ctx_term(kctx);
+#endif
 }
 
 /*
@@ -714,7 +844,7 @@ static bool kbase_jsctx_slot_prio_is_blocked(struct kbase_context *kctx, unsigne
 	/* all bits of sched_prio or higher, with sched_prio = 0 being the
 	 * highest priority
 	 */
-	higher_prios_mask = (prio_bit << 1) - 1u;
+	higher_prios_mask = (prio_bit << 1u) - 1u;
 	return (slot_tracking->blocked & higher_prios_mask) != 0u;
 }
 
@@ -842,7 +972,7 @@ static bool kbase_js_ctx_list_add_pullable_nolock(struct kbase_device *kbdev,
 			atomic_inc(&kbdev->js_data.nr_contexts_runnable);
 		}
 	}
-	kctx->slots_pullable |= (1 << js);
+	kctx->slots_pullable |= (1UL << js);
 
 	return ret;
 }
@@ -883,7 +1013,7 @@ static bool kbase_js_ctx_list_add_pullable_head_nolock(struct kbase_device *kbde
 			atomic_inc(&kbdev->js_data.nr_contexts_runnable);
 		}
 	}
-	kctx->slots_pullable |= (1 << js);
+	kctx->slots_pullable |= (1UL << js);
 
 	return ret;
 }
@@ -953,7 +1083,7 @@ static bool kbase_js_ctx_list_add_unpullable_nolock(struct kbase_device *kbdev,
 			atomic_dec(&kbdev->js_data.nr_contexts_runnable);
 		}
 	}
-	kctx->slots_pullable &= ~(1 << js);
+	kctx->slots_pullable &= ~(1UL << js);
 
 	return ret;
 }
@@ -994,7 +1124,7 @@ static bool kbase_js_ctx_list_remove_nolock(struct kbase_device *kbdev, struct k
 			atomic_dec(&kbdev->js_data.nr_contexts_runnable);
 		}
 	}
-	kctx->slots_pullable &= ~(1 << js);
+	kctx->slots_pullable &= ~(1UL << js);
 
 	return ret;
 }
@@ -1279,7 +1409,7 @@ void kbase_js_set_ctx_priority(struct kbase_context *kctx, int new_priority)
 	/* Move kctx to the pullable/upullable list as per the new priority */
 	if (new_priority != kctx->priority) {
 		for (js = 0; js < kbdev->gpu_props.num_job_slots; js++) {
-			if (kctx->slots_pullable & (1 << js))
+			if (kctx->slots_pullable & (1UL << js))
 				list_move_tail(&kctx->jctx.sched_info.ctx.ctx_list_entry[js],
 					       &kbdev->js_data.ctx_list_pullable[js][new_priority]);
 			else
@@ -1515,7 +1645,7 @@ bool kbasep_js_add_job(struct kbase_context *kctx, struct kbase_jd_atom *atom)
 	 * kick the job manager to attempt to fast-start the atom
 	 */
 	if (enqueue_required && kctx == kbdev->hwaccess.active_kctx[atom->slot_nr])
-		kbase_jm_try_kick(kbdev, 1 << atom->slot_nr);
+		kbase_jm_try_kick(kbdev, 1UL << atom->slot_nr);
 
 	spin_unlock_irqrestore(&kbdev->hwaccess_lock, flags);
 	if (timer_sync)
@@ -1755,7 +1885,7 @@ kbasep_js_runpool_release_ctx_internal(struct kbase_device *kbdev, struct kbase_
 #endif
 				   kbase_pm_is_suspending(kbdev))) {
 		int num_slots = kbdev->gpu_props.num_job_slots;
-		int slot;
+		unsigned int slot;
 
 		/* Last reference, and we've been told to remove this context
 		 * from the Run Pool
@@ -2272,7 +2402,8 @@ void kbasep_js_suspend(struct kbase_device *kbdev)
 void kbasep_js_resume(struct kbase_device *kbdev)
 {
 	struct kbasep_js_device_data *js_devdata;
-	int js, prio;
+	unsigned int js;
+	int prio;
 
 	KBASE_DEBUG_ASSERT(kbdev);
 	js_devdata = &kbdev->js_data;
@@ -2592,7 +2723,7 @@ struct kbase_jd_atom *kbase_js_pull(struct kbase_context *kctx, unsigned int js)
 	}
 
 	KBASE_KTRACE_ADD_JM_SLOT_INFO(kbdev, JS_PULL_JOB, kctx, katom, katom->jc, js,
-				      katom->sched_priority);
+				      (u64)katom->sched_priority);
 	kbase_ctx_flag_set(kctx, KCTX_PULLED);
 	kbase_ctx_flag_set(kctx, (KCTX_PULLED_SINCE_ACTIVE_JS0 << js));
 
@@ -2806,7 +2937,7 @@ static void js_return_worker(struct work_struct *data)
 	struct kbasep_js_device_data *js_devdata = &kbdev->js_data;
 	struct kbasep_js_kctx_info *js_kctx_info = &kctx->jctx.sched_info;
 	struct kbasep_js_atom_retained_state retained_state;
-	int js = katom->slot_nr;
+	unsigned int js = katom->slot_nr;
 	bool slot_became_unblocked;
 	bool timer_sync = false;
 	bool context_idle = false;
@@ -2861,8 +2992,8 @@ static void js_return_worker(struct work_struct *data)
 		}
 
 		if (kctx->as_nr != KBASEP_AS_NR_INVALID && !kbase_ctx_flag(kctx, KCTX_DYING)) {
-			int num_slots = kbdev->gpu_props.num_job_slots;
-			int slot;
+			unsigned int num_slots = kbdev->gpu_props.num_job_slots;
+			unsigned int slot;
 
 			if (!kbasep_js_is_submit_allowed(js_devdata, kctx))
 				kbasep_js_set_submit_allowed(js_devdata, kctx);
@@ -3085,14 +3216,14 @@ bool kbase_js_complete_atom_wq(struct kbase_context *kctx, struct kbase_jd_atom 
 	struct kbase_device *kbdev;
 	unsigned long flags;
 	bool timer_sync = false;
-	int atom_slot;
+	unsigned int atom_slot;
 	bool context_idle = false;
 	int prio = katom->sched_priority;
 
 	kbdev = kctx->kbdev;
 	atom_slot = katom->slot_nr;
 
-	dev_dbg(kbdev->dev, "%s for atom %pK (s:%d)\n", __func__, (void *)katom, atom_slot);
+	dev_dbg(kbdev->dev, "%s for atom %pK (s:%u)\n", __func__, (void *)katom, atom_slot);
 
 	/* Update the incremental rendering state machine.
 	 */
@@ -3130,7 +3261,7 @@ bool kbase_js_complete_atom_wq(struct kbase_context *kctx, struct kbase_jd_atom 
 		 */
 		if (slot_became_unblocked) {
 			dev_dbg(kbdev->dev,
-				"kctx %pK is no longer blocked from submitting on slot %d at priority %d or higher\n",
+				"kctx %pK is no longer blocked from submitting on slot %u at priority %d or higher\n",
 				(void *)kctx, atom_slot, prio);
 
 			if (kbase_js_ctx_pullable(kctx, atom_slot, true))
@@ -3394,7 +3525,7 @@ void kbase_js_sched(struct kbase_device *kbdev, unsigned int js_mask)
 	}
 
 	while (js_mask) {
-		js = ffs(js_mask) - 1;
+		js = (unsigned int)ffs((int)js_mask) - 1;
 
 		while (1) {
 			struct kbase_context *kctx;
@@ -3404,7 +3535,7 @@ void kbase_js_sched(struct kbase_device *kbdev, unsigned int js_mask)
 			kctx = kbase_js_ctx_list_pop_head(kbdev, js);
 
 			if (!kctx) {
-				js_mask &= ~(1 << js);
+				js_mask &= ~(1UL << js);
 				dev_dbg(kbdev->dev, "No kctx on pullable list (s:%u)\n", js);
 				break;
 			}
@@ -3456,7 +3587,7 @@ void kbase_js_sched(struct kbase_device *kbdev, unsigned int js_mask)
 				}
 
 				/* No more jobs can be submitted on this slot */
-				js_mask &= ~(1 << js);
+				js_mask &= ~(1UL << js);
 				break;
 			}
 			mutex_lock(&kctx->jctx.sched_info.ctx.jsctx_mutex);
@@ -3464,9 +3595,9 @@ void kbase_js_sched(struct kbase_device *kbdev, unsigned int js_mask)
 
 			kbase_ctx_flag_clear(kctx, KCTX_PULLED);
 
-			if (!kbase_jm_kick(kbdev, 1 << js)) {
+			if (!kbase_jm_kick(kbdev, 1UL << js)) {
 				dev_dbg(kbdev->dev, "No more jobs can be submitted (s:%u)\n", js);
-				js_mask &= ~(1 << js);
+				js_mask &= ~(1UL << js);
 			}
 			if (!kbase_ctx_flag(kctx, KCTX_PULLED)) {
 				bool pullable;
@@ -3514,7 +3645,7 @@ void kbase_js_sched(struct kbase_device *kbdev, unsigned int js_mask)
 				}
 				mutex_unlock(&kctx->jctx.sched_info.ctx.jsctx_mutex);
 
-				js_mask &= ~(1 << js);
+				js_mask &= ~(1UL << js);
 				break; /* Could not run atoms on this slot */
 			}
 
