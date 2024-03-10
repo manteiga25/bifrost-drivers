@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
- * (C) COPYRIGHT 2019-2021 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2023 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -19,18 +19,20 @@
  *
  */
 
-#ifndef _KBASE_L2_MMU_CONFIG_H_
-#define _KBASE_L2_MMU_CONFIG_H_
-/**
- * kbase_set_mmu_quirks - Set the hw_quirks_mmu field of kbdev
- *
- * @kbdev: The kbase device structure for the device (must be a valid pointer)
- *
- * Use this function to initialise the hw_quirks_mmu field, for instance to set
- * the MAX_READS and MAX_WRITES to sane defaults for each GPU.
- *
- * Return: Zero for succeess or a Linux error code
- */
-int kbase_set_mmu_quirks(struct kbase_device *kbdev);
+#ifndef _MALI_HW_ACCESS_H_
+#define _MALI_HW_ACCESS_H_
 
-#endif /* _KBASE_L2_MMU_CONFIG_H */
+#include <asm/arch_timer.h>
+#include <linux/io.h>
+
+
+#define mali_readl(addr) readl(addr)
+#define mali_readq(addr) readq(addr)
+#define mali_writel(val, addr) writel(val, addr)
+#define mali_writeq(val, addr) writeq(val, addr)
+#define mali_ioremap(addr, size) ioremap(addr, size)
+#define mali_iounmap(addr) iounmap(addr)
+#define mali_arch_timer_get_cntfrq() arch_timer_get_cntfrq()
+
+
+#endif /* _MALI_HW_ACCESS_H_ */
